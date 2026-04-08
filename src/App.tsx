@@ -3,11 +3,21 @@ import { TimelineCanvas } from './components/TimelineCanvas';
 import { InspectorPanel } from './components/InspectorPanel';
 import { createDemoTrip } from './data/sampleTrip';
 import type { TimelineEvent, Trip } from './types';
-import { moveFlexibleEvent, rescheduleTrip, updateEventInTrip } from './utils/scheduler';
+import { getTripDiagnostics, makeItWorkTrip, moveFlexibleEvent, rescheduleTrip, updateEventInTrip } from './utils/scheduler';
 import { formatDayLabel, makeUtcIso, minutesToMs } from './utils/time';
 
 const storageKey = 'fluid-timeline-trip-v1';
 const palette = ['#ff8a5b', '#3db7a7', '#7ea7ff', '#ffcc66', '#5dd39e', '#ff6f91', '#4cc9f0', '#ff9f1c'];
+
+function normalizeTrip(trip: Trip): Trip {
+  return {
+    ...trip,
+    events: trip.events.map((event) => ({
+      ...event,
+      eventTimezone: event.eventTimezone ?? trip.displayTimezone ?? 'UTC',
+    })),
+  };
+}
 
 function readStoredTrip() {
   const raw = window.localStorage.getItem(storageKey);
@@ -17,7 +27,7 @@ function readStoredTrip() {
 
   try {
     const parsed = JSON.parse(raw) as Trip;
-    return rescheduleTrip(parsed);
+    return rescheduleTrip(normalizeTrip(parsed));
   } catch {
     return createDemoTrip();
   }
@@ -25,6 +35,8 @@ function readStoredTrip() {
 
 export default function App() {
   const [trip, setTrip] = useState<Trip>(() => readStoredTrip());
+  const [solutionIndex, setSolutionIndex] = useState(0);
+  const [timelineZoom, setTimelineZoom] = useState(1);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(trip.events[0]?.id ?? null);
 
   useEffect(() => {
@@ -32,8 +44,10 @@ export default function App() {
   }, [trip]);
 
   const selectedEvent = trip.events.find((event) => event.id === selectedEventId);
+  const diagnostics = getTripDiagnostics(trip);
 
   const handleEventPatch = (eventId: string, patch: Partial<TimelineEvent>) => {
+    setSolutionIndex(0);
     setTrip((currentTrip) => updateEventInTrip(currentTrip, eventId, patch));
   };
 
@@ -53,6 +67,7 @@ export default function App() {
       title: 'New Floating Moment',
       notes: 'Add your own ritual, errand, or detour here.',
       location: 'Set a place',
+      eventTimezone: trip.displayTimezone,
       color: nextColor,
       kind: 'flexible',
       lane: trip.events.length % 2 === 0 ? 'top' : 'bottom',
@@ -68,13 +83,21 @@ export default function App() {
         events: [...currentTrip.events, nextEvent],
       }),
     );
+    setSolutionIndex(0);
     setSelectedEventId(nextEvent.id);
   };
 
   const handleResetDemo = () => {
     const freshTrip = createDemoTrip();
     setTrip(freshTrip);
+    setSolutionIndex(0);
     setSelectedEventId(freshTrip.events[0]?.id ?? null);
+  };
+
+  const handleMakeItWork = () => {
+    const nextSolutionIndex = solutionIndex + 1;
+    setSolutionIndex(nextSolutionIndex);
+    setTrip((currentTrip) => makeItWorkTrip(currentTrip, nextSolutionIndex));
   };
 
   const tripRange = `${formatDayLabel(trip.startUtc, trip.displayTimezone)} to ${formatDayLabel(
@@ -106,11 +129,15 @@ export default function App() {
 
           <TimelineCanvas
             trip={trip}
+            zoom={timelineZoom}
+            onZoomChange={setTimelineZoom}
+            conflictingEventIds={diagnostics.conflictingEventIds}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
-            onMoveFlexibleEvent={(eventId, nextStartMs, lane) =>
-              setTrip((currentTrip) => moveFlexibleEvent(currentTrip, eventId, nextStartMs, lane))
-            }
+            onMoveFlexibleEvent={(eventId, nextStartMs, lane) => {
+              setSolutionIndex(0);
+              setTrip((currentTrip) => moveFlexibleEvent(currentTrip, eventId, nextStartMs, lane));
+            }}
           />
         </section>
 
@@ -120,7 +147,10 @@ export default function App() {
           onSelectTimezone={(timeZone) => setTrip((currentTrip) => ({ ...currentTrip, displayTimezone: timeZone }))}
           onEventPatch={handleEventPatch}
           onAddEvent={handleAddEvent}
+          onMakeItWork={handleMakeItWork}
           onResetDemo={handleResetDemo}
+          solutionIndex={solutionIndex}
+          diagnostics={diagnostics}
         />
       </main>
     </div>

@@ -1,5 +1,6 @@
 import type { TimelineEvent, Trip } from '../types';
-import { formatDateTimeLabel, formatTimeLabel } from '../utils/time';
+import type { TripDiagnostics } from '../utils/scheduler';
+import { formatDateTimeLabel, formatTimeLabel, localInputToUtcIso, utcToLocalInputValue } from '../utils/time';
 
 type InspectorPanelProps = {
   trip: Trip;
@@ -7,7 +8,10 @@ type InspectorPanelProps = {
   onSelectTimezone: (timeZone: string) => void;
   onEventPatch: (eventId: string, patch: Partial<TimelineEvent>) => void;
   onAddEvent: () => void;
+  onMakeItWork: () => void;
   onResetDemo: () => void;
+  solutionIndex: number;
+  diagnostics: TripDiagnostics;
 };
 
 const timezones = [
@@ -22,14 +26,31 @@ const timezones = [
   'UTC',
 ];
 
+const allTimezones =
+  typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : timezones;
+
+const behaviorOptions = [
+  { value: 'flexible', label: 'Floating event' },
+  { value: 'hard', label: 'Fixed anchor' },
+] satisfies Array<{ value: TimelineEvent['kind']; label: string }>;
+
+const laneOptions = [
+  { value: 'top', label: 'Above the timeline' },
+  { value: 'bottom', label: 'Below the timeline' },
+] satisfies Array<{ value: TimelineEvent['lane']; label: string }>;
+
 export function InspectorPanel({
   trip,
   selectedEvent,
   onSelectTimezone,
   onEventPatch,
   onAddEvent,
+  onMakeItWork,
   onResetDemo,
+  solutionIndex,
+  diagnostics,
 }: InspectorPanelProps) {
+  const hasConflicts = diagnostics.overlappingPairs.length > 0;
   return (
     <aside className="inspector">
       <section className="panel glass-panel hero-panel">
@@ -40,9 +61,23 @@ export function InspectorPanel({
           <button type="button" className="primary-button" onClick={onAddEvent}>
             Add Floating Event
           </button>
+          <button type="button" className="secondary-button" onClick={onMakeItWork}>
+            Make It Work
+          </button>
           <button type="button" className="ghost-button" onClick={onResetDemo}>
             Reset Demo
           </button>
+        </div>
+        <p className="field-hint">Viewing alternate solution {solutionIndex + 1}. Press “Make It Work” again for another layout.</p>
+        <div className={hasConflicts ? 'status-banner is-warning' : 'status-banner is-good'}>
+          <strong>{hasConflicts ? `${diagnostics.overlappingPairs.length} timing conflict${diagnostics.overlappingPairs.length === 1 ? '' : 's'}` : 'No timing conflicts'}</strong>
+          <span>
+            {hasConflicts
+              ? `${diagnostics.conflictingEventIds.length} events still overlap in real time.`
+              : diagnostics.crowdedPairs > 0
+                ? `${diagnostics.crowdedPairs} visually crowded pair${diagnostics.crowdedPairs === 1 ? '' : 's'} remain.`
+                : 'Timeline is both clean in time and visually roomy.'}
+          </span>
         </div>
       </section>
 
@@ -112,35 +147,84 @@ export function InspectorPanel({
 
             <div className="field-grid">
               <label className="field">
-                <span>Mode</span>
+                <span>Event Timezone</span>
                 <select
-                  value={selectedEvent.kind}
-                  onChange={(event) =>
-                    onEventPatch(selectedEvent.id, {
-                      kind: event.target.value as TimelineEvent['kind'],
-                      preferredStartUtc:
-                        event.target.value === 'flexible' ? selectedEvent.preferredStartUtc ?? selectedEvent.startUtc : undefined,
-                    })
-                  }
+                  value={selectedEvent.eventTimezone}
+                  onChange={(event) => onEventPatch(selectedEvent.id, { eventTimezone: event.target.value })}
                 >
-                  <option value="flexible">Float</option>
-                  <option value="hard">Anchor</option>
+                  {allTimezones.map((zone) => (
+                    <option key={zone} value={zone}>
+                      {zone}
+                    </option>
+                  ))}
                 </select>
               </label>
 
               <label className="field">
-                <span>Lane</span>
-                <select
-                  value={selectedEvent.lane}
-                  onChange={(event) => onEventPatch(selectedEvent.id, { lane: event.target.value as TimelineEvent['lane'] })}
-                >
-                  <option value="top">Top</option>
-                  <option value="bottom">Bottom</option>
-                </select>
+                <span>Behavior</span>
+                <div className="choice-row" role="group" aria-label="Behavior">
+                  {behaviorOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={selectedEvent.kind === option.value ? 'choice-chip is-active' : 'choice-chip'}
+                      onClick={() =>
+                        onEventPatch(selectedEvent.id, {
+                          kind: option.value,
+                          preferredStartUtc:
+                            option.value === 'flexible'
+                              ? selectedEvent.preferredStartUtc ?? selectedEvent.startUtc
+                              : undefined,
+                        })
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
               </label>
             </div>
+            <p className="field-hint">
+              Behavior decides whether the event can move and flow around other items or stays locked as a fixed
+              anchor.
+            </p>
+
+            <label className="field">
+              <span>Event Local Start</span>
+              <input
+                type="datetime-local"
+                value={utcToLocalInputValue(selectedEvent.startUtc, selectedEvent.eventTimezone)}
+                onChange={(event) => {
+                  const nextUtc = localInputToUtcIso(event.target.value, selectedEvent.eventTimezone);
+                  if (!nextUtc) {
+                    return;
+                  }
+
+                  onEventPatch(selectedEvent.id, {
+                    startUtc: nextUtc,
+                    preferredStartUtc: selectedEvent.kind === 'flexible' ? nextUtc : undefined,
+                  });
+                }}
+              />
+            </label>
 
             <div className="field-grid">
+              <label className="field">
+                <span>Axis Side</span>
+                <div className="choice-row" role="group" aria-label="Axis side">
+                  {laneOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={selectedEvent.lane === option.value ? 'choice-chip is-active' : 'choice-chip'}
+                      onClick={() => onEventPatch(selectedEvent.id, { lane: option.value })}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </label>
+
               <label className="field">
                 <span>Duration</span>
                 <input
@@ -152,7 +236,10 @@ export function InspectorPanel({
                   onChange={(event) => onEventPatch(selectedEvent.id, { durationMin: Number(event.target.value) })}
                 />
               </label>
+            </div>
+            <p className="field-hint">Axis side only controls whether the event sits above or below the center line.</p>
 
+            <div className="field-grid">
               <label className="field">
                 <span>Color</span>
                 <input
@@ -183,15 +270,19 @@ export function InspectorPanel({
 
             <div className="event-readout">
               <div>
-                <span>Starts</span>
+                <span>Starts In View</span>
                 <strong>{formatDateTimeLabel(selectedEvent.startUtc, trip.displayTimezone)}</strong>
               </div>
               <div>
-                <span>Ends</span>
+                <span>Ends In View</span>
                 <strong>{formatDateTimeLabel(selectedEvent.endUtc, trip.displayTimezone)}</strong>
               </div>
               <div>
-                <span>Window</span>
+                <span>Event Local Time</span>
+                <strong>{formatDateTimeLabel(selectedEvent.startUtc, selectedEvent.eventTimezone)}</strong>
+              </div>
+              <div>
+                <span>Window In View</span>
                 <strong>
                   {formatTimeLabel(selectedEvent.startUtc, trip.displayTimezone)} -{' '}
                   {formatTimeLabel(selectedEvent.endUtc, trip.displayTimezone)}

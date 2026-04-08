@@ -6,6 +6,7 @@ export type TimelineEvent = {
   title: string;
   notes: string;
   location: string;
+  eventTimezone: string;
   color: string;
   kind: EventKind;
   lane: EventLane;
@@ -30,5 +31,7 @@ export type BubblePosition = {
   y: number;
   vx: number;
   vy: number;
-  radius: number;
+  width: number;
+  height: number;
+  collisionRadius: number;
 };
